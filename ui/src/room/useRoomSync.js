@@ -140,6 +140,7 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
   // Handle pause event
   const handlePause = useCallback(
     (audioInfo) => {
+      console.log('[RoomSync] handlePause called')
       if (audioInfo && audioInfo.trackId) {
         broadcastState(false, audioInfo.currentTime || 0, audioInfo.trackId)
       }

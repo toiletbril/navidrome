@@ -84,6 +84,7 @@ func GetBroker() Broker {
 }
 
 func (b *broker) SendBroadcastMessage(ctx context.Context, evt Event) {
+	log.Debug(ctx, "Broadcasting event to all clients", "eventType", evt.Name(evt))
 	ctx = broadcastToAll(ctx)
 	b.SendMessage(ctx, evt)
 }
@@ -206,6 +207,7 @@ func (b *broker) shouldSend(msg message, c client) bool {
 	// Check if this user should be excluded from the broadcast
 	if excludeUserID, ok := msg.senderCtx.Value(excludeUserIDKey).(string); ok && excludeUserID != "" {
 		if c.userID == excludeUserID {
+			log.Debug("Excluding user from broadcast", "event", msg.event, "excludedUserID", excludeUserID, "clientUserID", c.userID, "client", c.String())
 			return false // Skip sending to excluded user
 		}
 	}
@@ -215,13 +217,16 @@ func (b *broker) shouldSend(msg message, c client) bool {
 		// Only send if client's userID is in the participants list
 		for _, pid := range participantIDs {
 			if c.userID == pid {
+				log.Debug("Sending room event to participant", "event", msg.event, "participantUserID", c.userID, "client", c.String())
 				return true
 			}
 		}
+		log.Debug("Skipping room event for non-participant", "event", msg.event, "clientUserID", c.userID, "participantCount", len(participantIDs))
 		return false // Client not in room, don't send
 	}
 
 	if broadcastToAll, ok := msg.senderCtx.Value(broadcastToAllKey).(bool); ok && broadcastToAll {
+		log.Debug("Broadcasting to all clients", "event", msg.event, "client", c.String())
 		return true
 	}
 	clientUniqueId, originatedFromClient := request.ClientUniqueIdFrom(msg.senderCtx)

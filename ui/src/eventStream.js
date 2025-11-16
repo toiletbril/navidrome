@@ -67,6 +67,11 @@ const connect = async (dispatchFn) => {
 const eventHandler = (dispatchFn) => (event) => {
   const data = JSON.parse(event.data)
   if (event.type !== 'keepAlive') {
+    // Log room events for debugging
+    if (event.type.startsWith('room')) {
+      // eslint-disable-next-line no-console
+      console.log('[EventStream] Received room event:', event.type, data)
+    }
     dispatchFn(processEvent(event.type, data))
   }
 }

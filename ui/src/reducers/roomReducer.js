@@ -103,6 +103,7 @@ const reduceCreateRoom = (state, { data }) => {
     error: null,
   }
   newState.canControl = computeCanControl(newState.hostControlOnly, newState.hostUserId)
+  console.log('[RoomReducer] Room created:', newState.roomId, 'hostControlOnly:', newState.hostControlOnly, 'canControl:', newState.canControl)
   return newState
 }
 
@@ -125,10 +126,12 @@ const reduceJoinRoom = (state, { data }) => {
     error: null,
   }
   newState.canControl = computeCanControl(newState.hostControlOnly, newState.hostUserId)
+  console.log('[RoomReducer] Joined room:', newState.roomId, 'isHost:', newState.isHost, 'hostControlOnly:', newState.hostControlOnly, 'canControl:', newState.canControl, 'queueLength:', newState.sharedQueue.length)
   return newState
 }
 
 const reduceLeaveRoom = () => {
+  console.log('[RoomReducer] Left room, resetting state')
   return {
     ...initialState,
   }
@@ -227,6 +230,7 @@ const reduceUserJoined = (state, { data }) => {
 }
 
 const reduceUserLeft = (state, { data }) => {
+  console.log('[RoomReducer] User left:', data.userId)
   const participants = state.participants.filter((p) => p.userId !== data.userId)
   return {
     ...state,

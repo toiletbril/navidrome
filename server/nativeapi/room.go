@@ -94,6 +94,8 @@ func createRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			return
 		}
 
+		log.Info(ctx, "Room created", "roomId", room.ID, "roomName", room.Name, "hostUserId", user.ID, "hostControlOnly", room.HostControlOnly)
+
 		// Add creator as participant
 		if err := ds.Room(ctx).AddParticipant(room.ID, user.ID, user.UserName); err != nil {
 			log.Error(ctx, "Error adding creator to room", err)
@@ -241,6 +243,8 @@ func leaveRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		log.Info(ctx, "User left room", "roomId", room.ID, "userId", user.ID, "wasHost", wasHost)
 
 		// Broadcast user left event to room participants
 		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
@@ -434,6 +438,8 @@ func updateSettings(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			}
 			room.HostControlOnly = *payload.HostControlOnly
 
+			log.Info(ctx, "Room host control setting changed", "roomId", room.ID, "hostControlOnly", *payload.HostControlOnly, "userId", user.ID)
+
 			// Broadcast settings changed to room participants
 			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
 			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
@@ -489,6 +495,8 @@ func updateRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerFunc 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		log.Info(ctx, "Room queue updated", "roomId", room.ID, "userId", user.ID, "queueLength", len(payload.QueueItems), "currentIndex", payload.CurrentIndex)
 
 		// Broadcast queue change to room participants EXCEPT originator
 		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
@@ -546,6 +554,8 @@ func addToRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		log.Info(ctx, "Tracks added to room queue", "roomId", room.ID, "userId", user.ID, "addedCount", len(payload.TrackIDs), "newQueueLength", len(newQueue))
 
 		// Broadcast queue change to room participants
 		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
@@ -617,6 +627,8 @@ func removeFromRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerF
 			return
 		}
 
+		log.Info(ctx, "Track removed from room queue", "roomId", room.ID, "userId", user.ID, "removedIndex", index, "newQueueLength", len(newQueue), "newCurrentIndex", newIndex)
+
 		// Broadcast queue change to room participants
 		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
 		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
@@ -678,6 +690,8 @@ func kickParticipant(ds model.DataStore, broker events.Broker) http.HandlerFunc 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		log.Info(ctx, "Participant kicked from room", "roomId", room.ID, "kickedUserId", kickUserID, "hostUserId", user.ID)
 
 		// Broadcast kick event to room participants
 		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
