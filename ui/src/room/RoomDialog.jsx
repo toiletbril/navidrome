@@ -38,7 +38,7 @@ import {
   Typography,
 } from '@material-ui/core'
 import { useTranslate, useNotify } from 'react-admin'
-import { createRoom, joinRoom, setRoomError } from '../actions'
+import { updateRoom, setRoomError } from '../actions'
 import { roomService } from './roomService'
 import { RoomList } from './RoomList'
 
@@ -61,6 +61,7 @@ export const RoomDialog = ({ open, onClose }) => {
   const notify = useNotify()
   const dispatch = useDispatch()
   const roomState = useSelector((state) => state.room)
+  const playerState = useSelector((state) => state.player)
 
   const [tabValue, setTabValue] = useState(0)
   const [roomName, setRoomName] = useState('')
@@ -79,25 +80,20 @@ export const RoomDialog = ({ open, onClose }) => {
 
     setLoading(true)
     try {
-      const room = await roomService.create(roomName)
+      // Capture current local playback state to transfer to room
+      const initialState = {
+        queueItems: playerState.queue.map(item => item.trackId).filter(Boolean),
+        currentIndex: playerState.savedPlayIndex || 0,
+        currentTrackId: playerState.current?.trackId || null,
+        currentPosition: Math.floor((playerState.current?.currentTime || 0) * 1000),
+        isPlaying: playerState.current?.paused === false,
+      }
 
-      dispatch(createRoom(roomName))
-      dispatch({
-        type: 'ROOM_UPDATE_STATE',
-        data: {
-          roomId: room.id,
-          roomName: room.name,
-          hostUserId: room.hostUserId,
-          hostControlOnly: room.hostControlOnly,
-          isHost: true,
-          participants: room.participants || [],
-          sharedQueue: room.queueItems || [],
-          currentIndex: room.currentIndex || 0,
-          currentTrackId: room.currentTrackId,
-          currentPosition: room.currentPosition,
-          isPlaying: room.isPlaying,
-        },
-      })
+      console.log('[RoomDialog] Creating room with initial state:', initialState)
+      const room = await roomService.create(roomName, initialState)
+
+      // Single unified update with complete room data from server
+      dispatch(updateRoom(room))
       notify('room.created', { type: 'info' })
       onClose()
     } catch (error) {
@@ -119,23 +115,8 @@ export const RoomDialog = ({ open, onClose }) => {
     try {
       const room = await roomService.join(roomId)
 
-      dispatch(joinRoom(roomId))
-      dispatch({
-        type: 'ROOM_UPDATE_STATE',
-        data: {
-          roomId: room.id,
-          roomName: room.name,
-          hostUserId: room.hostUserId,
-          hostControlOnly: room.hostControlOnly,
-          isHost: false,
-          participants: room.participants || [],
-          sharedQueue: room.queueItems || [],
-          currentIndex: room.currentIndex || 0,
-          currentTrackId: room.currentTrackId,
-          currentPosition: room.currentPosition,
-          isPlaying: room.isPlaying,
-        },
-      })
+      // Single unified update with complete room data from server
+      dispatch(updateRoom(room))
       notify('room.joined', { type: 'info' })
       onClose()
     } catch (error) {

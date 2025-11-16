@@ -49,8 +49,48 @@ func getRoomParticipantIDs(ctx context.Context, ds model.DataStore, roomID strin
 	return userIDs
 }
 
+// buildRoomUpdateEvent creates a complete room state event for broadcasting
+// This ensures all clients receive the full synchronized state in a single atomic update
+// userID parameter is optional - if provided, it's included for client-side deduplication
+func buildRoomUpdateEvent(ctx context.Context, ds model.DataStore, roomID string, userID string) *events.RoomUpdate {
+	roomWithParticipants, err := ds.Room(ctx).GetWithParticipants(roomID)
+	if err != nil {
+		log.Error(ctx, "Error getting room state for broadcast", "roomId", roomID, err)
+		return nil
+	}
+
+	// Convert model.RoomParticipant to events.RoomParticipant
+	participants := make([]events.RoomParticipant, len(roomWithParticipants.Participants))
+	for i, p := range roomWithParticipants.Participants {
+		participants[i] = events.RoomParticipant{
+			UserID:   p.UserID,
+			UserName: p.UserName,
+			RoomID:   p.RoomID,
+		}
+	}
+
+	return &events.RoomUpdate{
+		RoomID:          roomWithParticipants.ID,
+		RoomName:        roomWithParticipants.Name,
+		HostUserID:      roomWithParticipants.HostUserID,
+		HostControlOnly: roomWithParticipants.HostControlOnly,
+		QueueItems:      roomWithParticipants.QueueItems,
+		CurrentIndex:    roomWithParticipants.CurrentIndex,
+		CurrentTrackID:  roomWithParticipants.CurrentTrackID,
+		CurrentPosition: roomWithParticipants.CurrentPosition,
+		IsPlaying:       roomWithParticipants.IsPlaying,
+		Participants:    participants,
+		UserID:          userID, // Include originating user for client-side deduplication
+	}
+}
+
 type createRoomPayload struct {
-	Name string `json:"name"`
+	Name            string   `json:"name"`
+	QueueItems      []string `json:"queueItems,omitempty"`
+	CurrentIndex    int      `json:"currentIndex,omitempty"`
+	CurrentTrackID  string   `json:"currentTrackId,omitempty"`
+	CurrentPosition int64    `json:"currentPosition,omitempty"`
+	IsPlaying       bool     `json:"isPlaying,omitempty"`
 }
 
 type updateRoomStatePayload struct {
@@ -83,9 +123,13 @@ func createRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 		}
 
 		room := &model.Room{
-			Name:       payload.Name,
-			HostUserID: user.ID,
-			IsPlaying:  false,
+			Name:            payload.Name,
+			HostUserID:      user.ID,
+			QueueItems:      payload.QueueItems,
+			CurrentIndex:    payload.CurrentIndex,
+			CurrentTrackID:  payload.CurrentTrackID,
+			CurrentPosition: payload.CurrentPosition,
+			IsPlaying:       payload.IsPlaying,
 		}
 
 		if err := ds.Room(ctx).Create(room); err != nil {
@@ -173,15 +217,14 @@ func joinRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			return
 		}
 
-		// Broadcast user joined event to room participants
-		log.Info(ctx, "Broadcasting RoomUserJoined event", "roomId", roomID, "userId", user.ID, "userName", user.UserName)
-		participantIDs := getRoomParticipantIDs(ctx, ds, roomID)
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomUserJoined{
-			RoomID:   roomID,
-			UserID:   user.ID,
-			UserName: user.UserName,
-		})
+		// Broadcast full room state to all participants
+		log.Info(ctx, "Broadcasting room update after user joined", "roomId", roomID, "userId", user.ID, "userName", user.UserName)
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, roomID, user.ID); roomUpdate != nil {
+			participantIDs := getRoomParticipantIDs(ctx, ds, roomID)
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID) // Joining user already has full state from response
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		// Get room with participants
 		roomWithParticipants, err := ds.Room(ctx).GetWithParticipants(roomID)
@@ -224,14 +267,6 @@ func leaveRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 			if err := ds.Room(ctx).Update(room); err != nil {
 				log.Error(ctx, "Error updating room on host leave", err)
 			}
-
-			// Broadcast host control changed to room participants
-			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-			broker.SendBroadcastMessage(broadcastCtx, &events.RoomHostControlChanged{
-				RoomID:          room.ID,
-				HostControlOnly: false,
-			})
 		}
 
 		// Get participant IDs BEFORE removing user
@@ -246,12 +281,11 @@ func leaveRoom(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 
 		log.Info(ctx, "User left room", "roomId", room.ID, "userId", user.ID, "wasHost", wasHost)
 
-		// Broadcast user left event to room participants
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomUserLeft{
-			RoomID: room.ID,
-			UserID: user.ID,
-		})
+		// Broadcast full room state to remaining participants
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -289,12 +323,11 @@ func cleanupDisconnectedUser(ctx context.Context, ds model.DataStore, broker eve
 
 	log.Info(ctx, "Cleaned up disconnected user from room", "username", username, "roomId", room.ID)
 
-	// Broadcast user left event to remaining participants
-	broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-	broker.SendBroadcastMessage(broadcastCtx, &events.RoomUserLeft{
-		RoomID: room.ID,
-		UserID: user.ID,
-	})
+	// Broadcast full room state to remaining participants
+	if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, ""); roomUpdate != nil {
+		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+		broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+	}
 }
 
 func updateRoomState(ds model.DataStore, broker events.Broker) http.HandlerFunc {
@@ -343,18 +376,14 @@ func updateRoomState(ds model.DataStore, broker events.Broker) http.HandlerFunc 
 			return
 		}
 
-		// Broadcast state change to room participants EXCEPT originator
-		log.Info(ctx, "Broadcasting RoomStateChange event", "roomId", room.ID, "userId", user.ID, "trackId", room.CurrentTrackID, "position", room.CurrentPosition, "isPlaying", room.IsPlaying)
-		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomStateChange{
-			RoomID:          room.ID,
-			CurrentTrackID:  room.CurrentTrackID,
-			CurrentPosition: room.CurrentPosition,
-			IsPlaying:       room.IsPlaying,
-			UserID:          user.ID,
-		})
+		// Broadcast full room state to participants EXCEPT originator
+		log.Info(ctx, "Broadcasting room update after state change", "roomId", room.ID, "userId", user.ID, "trackId", room.CurrentTrackID, "position", room.CurrentPosition, "isPlaying", room.IsPlaying)
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(room)
@@ -440,13 +469,12 @@ func updateSettings(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 
 			log.Info(ctx, "Room host control setting changed", "roomId", room.ID, "hostControlOnly", *payload.HostControlOnly, "userId", user.ID)
 
-			// Broadcast settings changed to room participants
-			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-			broker.SendBroadcastMessage(broadcastCtx, &events.RoomHostControlChanged{
-				RoomID:          room.ID,
-				HostControlOnly: *payload.HostControlOnly,
-			})
+			// Broadcast full room state to all participants
+			if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+				participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
+				broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+				broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -456,8 +484,11 @@ func updateSettings(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 
 // Update room queue
 type roomQueuePayload struct {
-	QueueItems   []string `json:"queueItems"`
-	CurrentIndex int      `json:"currentIndex"`
+	QueueItems      []string `json:"queueItems"`
+	CurrentIndex    int      `json:"currentIndex"`
+	CurrentTrackID  string   `json:"currentTrackId,omitempty"`
+	CurrentPosition int64    `json:"currentPosition,omitempty"`
+	IsPlaying       bool     `json:"isPlaying,omitempty"`
 }
 
 func updateRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerFunc {
@@ -496,18 +527,28 @@ func updateRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerFunc 
 			return
 		}
 
-		log.Info(ctx, "Room queue updated", "roomId", room.ID, "userId", user.ID, "queueLength", len(payload.QueueItems), "currentIndex", payload.CurrentIndex)
+		// If playback state was included, update it too to preserve position
+		if payload.CurrentTrackID != "" {
+			room, err = ds.Room(ctx).Get(room.ID) // Refresh room after queue update
+			if err == nil {
+				room.CurrentTrackID = payload.CurrentTrackID
+				room.CurrentPosition = payload.CurrentPosition
+				room.IsPlaying = payload.IsPlaying
+				if err := ds.Room(ctx).Update(room); err != nil {
+					log.Warn(ctx, "Error updating playback state during queue change", err)
+				}
+			}
+		}
 
-		// Broadcast queue change to room participants EXCEPT originator
-		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomQueueChanged{
-			RoomID:       room.ID,
-			QueueItems:   payload.QueueItems,
-			CurrentIndex: payload.CurrentIndex,
-			UserID:       user.ID,
-		})
+		log.Info(ctx, "Room queue updated", "roomId", room.ID, "userId", user.ID, "queueLength", len(payload.QueueItems), "currentIndex", payload.CurrentIndex, "position", payload.CurrentPosition)
+
+		// Broadcast full room state to participants EXCEPT originator
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -557,16 +598,13 @@ func addToRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerFunc {
 
 		log.Info(ctx, "Tracks added to room queue", "roomId", room.ID, "userId", user.ID, "addedCount", len(payload.TrackIDs), "newQueueLength", len(newQueue))
 
-		// Broadcast queue change to room participants
-		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomQueueChanged{
-			RoomID:       room.ID,
-			QueueItems:   newQueue,
-			CurrentIndex: room.CurrentIndex,
-			UserID:       user.ID,
-		})
+		// Broadcast full room state to participants EXCEPT originator
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -617,7 +655,14 @@ func removeFromRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerF
 		// Remove from queue
 		newQueue := append(room.QueueItems[:index], room.QueueItems[index+1:]...)
 		newIndex := room.CurrentIndex
-		if index < room.CurrentIndex {
+
+		if index == room.CurrentIndex {
+			// Removing current track - keep same index (next track shifts into position)
+			// If it was the last track, move to previous
+			if newIndex >= len(newQueue) && len(newQueue) > 0 {
+				newIndex = len(newQueue) - 1
+			}
+		} else if index < room.CurrentIndex {
 			newIndex-- // Adjust current index if we removed before it
 		}
 
@@ -629,16 +674,13 @@ func removeFromRoomQueue(ds model.DataStore, broker events.Broker) http.HandlerF
 
 		log.Info(ctx, "Track removed from room queue", "roomId", room.ID, "userId", user.ID, "removedIndex", index, "newQueueLength", len(newQueue), "newCurrentIndex", newIndex)
 
-		// Broadcast queue change to room participants
-		participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
-		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
-		broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomQueueChanged{
-			RoomID:       room.ID,
-			QueueItems:   newQueue,
-			CurrentIndex: newIndex,
-			UserID:       user.ID,
-		})
+		// Broadcast full room state to participants EXCEPT originator
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			participantIDs := getRoomParticipantIDs(ctx, ds, room.ID)
+			broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
+			broadcastCtx = events.WithExcludeUserID(broadcastCtx, user.ID)
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -693,18 +735,17 @@ func kickParticipant(ds model.DataStore, broker events.Broker) http.HandlerFunc 
 
 		log.Info(ctx, "Participant kicked from room", "roomId", room.ID, "kickedUserId", kickUserID, "hostUserId", user.ID)
 
-		// Broadcast kick event to room participants
+		// Broadcast kick event to kicked user (separate event needed for immediate notification)
 		broadcastCtx := events.WithRoomParticipants(ctx, participantIDs)
 		broker.SendBroadcastMessage(broadcastCtx, &events.RoomParticipantKicked{
 			RoomID:       room.ID,
 			KickedUserID: kickUserID,
 		})
 
-		// Also broadcast user left event
-		broker.SendBroadcastMessage(broadcastCtx, &events.RoomUserLeft{
-			RoomID: room.ID,
-			UserID: kickUserID,
-		})
+		// Broadcast full room state to remaining participants
+		if roomUpdate := buildRoomUpdateEvent(ctx, ds, room.ID, user.ID); roomUpdate != nil {
+			broker.SendBroadcastMessage(broadcastCtx, roomUpdate)
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	}

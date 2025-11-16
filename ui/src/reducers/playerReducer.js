@@ -30,7 +30,7 @@ const pad = (value) => {
   }
 }
 
-const mapToAudioLists = (item) => {
+export const mapToAudioLists = (item) => {
   // If item comes from a playlist, trackId is mediaFileId
   const trackId = item.mediaFileId || item.id
 
@@ -156,11 +156,11 @@ const reduceSetVolume = (state, { data: { volume } }) => {
   }
 }
 
-const reduceSyncQueue = (state, { data: { audioInfo, audioLists } }) => {
+const reduceSyncQueue = (state, { data: { audioInfo, audioLists, clear } }) => {
   return {
     ...state,
     queue: audioLists,
-    clear: false,
+    clear: clear !== undefined ? clear : false,
     playIndex: undefined,
   }
 }

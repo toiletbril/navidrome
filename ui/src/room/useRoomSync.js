@@ -130,27 +130,42 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
   const handlePlay = useCallback(
     (audioInfo) => {
       console.log('[RoomSync] handlePlay called')
+      // Only broadcast if user has control permission
+      if (!roomState.canControl) {
+        console.log('[RoomSync] Skipping play broadcast - no control permission')
+        return
+      }
       if (audioInfo && audioInfo.trackId) {
         broadcastState(true, audioInfo.currentTime || 0, audioInfo.trackId)
       }
     },
-    [broadcastState],
+    [broadcastState, roomState.canControl],
   )
 
   // Handle pause event
   const handlePause = useCallback(
     (audioInfo) => {
       console.log('[RoomSync] handlePause called')
+      // Only broadcast if user has control permission
+      if (!roomState.canControl) {
+        console.log('[RoomSync] Skipping pause broadcast - no control permission')
+        return
+      }
       if (audioInfo && audioInfo.trackId) {
         broadcastState(false, audioInfo.currentTime || 0, audioInfo.trackId)
       }
     },
-    [broadcastState],
+    [broadcastState, roomState.canControl],
   )
 
   // Handle seek event (when user scrubs the timeline)
   const handleSeek = useCallback(
     (seekInfo) => {
+      // Only broadcast if user has control permission
+      if (!roomState.canControl) {
+        console.log('[RoomSync] Skipping seek broadcast - no control permission')
+        return
+      }
       if (seekInfo && seekInfo.trackId && seekInfo.isPlaying !== undefined) {
         // Use isPlaying from seekInfo (read from audioInstance at exact event time)
         const isPlaying = seekInfo.isPlaying
@@ -158,12 +173,12 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
         broadcastState(isPlaying, seekInfo.currentTime || 0, seekInfo.trackId)
       }
     },
-    [broadcastState],
+    [broadcastState, roomState.canControl],
   )
 
   // Handle queue change (broadcast to room)
   const handleQueueChange = useCallback(
-    async (queueItems, currentIndex) => {
+    async (queueItems, currentIndex, currentPlaybackState) => {
       if (!roomState.isInRoom || !roomState.canControl) {
         console.log('[RoomSync] Cannot change queue - no permission')
         return
@@ -178,8 +193,8 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
       lastSyncRef.current = now
 
       try {
-        console.log('[RoomSync] Broadcasting queue change:', { queueItems, currentIndex })
-        await roomService.updateQueue(queueItems, currentIndex)
+        console.log('[RoomSync] Broadcasting queue change:', { queueItems, currentIndex, playbackState: currentPlaybackState })
+        await roomService.updateQueue(queueItems, currentIndex, currentPlaybackState)
       } catch (error) {
         console.error('[RoomSync] Error broadcasting queue change:', error)
       }
@@ -216,17 +231,26 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
       if (remoteState.userId && remoteState.userId === currentUserId) {
         console.log('[RoomSync] Skipping own broadcast (userId match)', {
           userId: currentUserId,
-          remoteState,
+          remoteUserId: remoteState.userId,
         })
         return
       }
 
       console.log('[RoomSync] Applying remote state:', remoteState, 'Current track:', currentTrackId)
 
-      // Only sync if we're playing the same track
+      // Handle track mismatch
       if (currentTrackId !== remoteState.currentTrackId) {
-        console.log('[RoomSync] Track mismatch, skipping sync')
-        return
+        // If user doesn't have control permission, they must follow the room's track
+        if (!roomState.canControl) {
+          console.log('[RoomSync] Track mismatch - forcing switch to room track (no permission)')
+          // The queue sync should handle loading the correct track
+          // For now, just skip position/play sync since track is changing anyway
+          return
+        } else {
+          // User has permission, they can play different tracks - skip sync
+          console.log('[RoomSync] Track mismatch, skipping sync (user has control)')
+          return
+        }
       }
 
       // Store the state we're about to apply for deduplication
@@ -272,7 +296,7 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
       // Sync if time difference is significant (> 1 second)
       const needsSeek = Math.abs(currentTime - remoteTime) > 1
       if (needsSeek) {
-        console.log('[RoomSync] Syncing position:', remoteTime)
+        console.log('[RoomSync] Syncing position:', remoteTime, 'readyState:', audioInstance.readyState)
         // Store the seek target so we can identify the seeked event later
         lastRemoteSeekTime.current = remoteTime
 
@@ -282,7 +306,24 @@ export const useRoomSync = (audioInstance, isCurrentlyPlayingRef) => {
           expectingAutoPlayRef.current = true
         }
 
-        audioInstance.currentTime = remoteTime
+        // Wait for audio to be ready before seeking (prevents race condition on join)
+        const performSeek = () => {
+          console.log('[RoomSync] Performing seek to:', remoteTime)
+          audioInstance.currentTime = remoteTime
+        }
+
+        if (audioInstance.readyState >= 2) {
+          // HAVE_CURRENT_DATA or better - safe to seek
+          performSeek()
+        } else {
+          // Audio not ready yet - wait for canplay event
+          console.log('[RoomSync] Audio not ready, waiting for canplay event')
+          const canplayHandler = () => {
+            performSeek()
+            audioInstance.removeEventListener('canplay', canplayHandler)
+          }
+          audioInstance.addEventListener('canplay', canplayHandler)
+        }
       }
 
       // Events triggered by our state changes will be deduplicated in broadcastState()

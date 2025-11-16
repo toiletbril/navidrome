@@ -25,6 +25,7 @@ import {
   setVolume,
   syncQueue,
 } from '../actions'
+import { mapToAudioLists } from '../reducers/playerReducer'
 import PlayerToolbar from './PlayerToolbar'
 import { sendNotification } from '../utils'
 import subsonic from '../subsonic'
@@ -52,6 +53,9 @@ const Player = () => {
     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
       navigator.userAgent,
     )
+
+  // Ref to prevent infinite seek loop when blocking unauthorized seeks
+  const blockingSeekRef = useRef(false)
 
   const { authenticated } = useAuthState()
   const visible = authenticated && playerState.queue.length > 0
@@ -142,19 +146,35 @@ const Player = () => {
 
   const options = useMemo(() => {
     const current = playerState.current || {}
+    // In room without control permission, disable queue modifications and seeking
+    const canModifyQueue = !roomState.isInRoom || roomState.canControl
+
+    // Only autoPlay if: (1) not in room, OR (2) in room and room is playing
+    // This prevents queue sync from auto-playing when room is paused
+    const shouldAutoPlay = (playerState.clear || playerState.playIndex === 0) &&
+                           (!roomState.isInRoom || roomState.isPlaying)
+
     return {
       ...defaultOptions,
       audioLists: playerState.queue.map((item) => item),
       playIndex: playerState.playIndex,
-      autoPlay: playerState.clear || playerState.playIndex === 0,
+      autoPlay: shouldAutoPlay,
       clearPriorAudioLists: playerState.clear,
       extendsContent: (
         <PlayerToolbar id={current.trackId} isRadio={current.isRadio} audioInstance={audioInstance} />
       ),
       defaultVolume: isMobilePlayer ? 1 : playerState.volume,
       showMediaSession: !current.isRadio,
+      // Disable queue modification controls when in room without permission
+      remove: canModifyQueue,
+      drag: canModifyQueue,
+      // Hide playlist and play mode controls when no permission
+      showPlayMode: canModifyQueue,
+      showPlay: true, // Always show play/pause (allowed even without permission)
+      // Disable seeking when in room without permission
+      seeked: canModifyQueue,
     }
-  }, [playerState, defaultOptions, isMobilePlayer, audioInstance])
+  }, [playerState, defaultOptions, isMobilePlayer, audioInstance, roomState.isInRoom, roomState.canControl, roomState.isPlaying])
 
   const onAudioListsChange = useCallback(
     (_, audioLists, audioInfo) => {
@@ -171,18 +191,34 @@ const Player = () => {
       if (roomState.isInRoom && roomState.canControl) {
         // Extract track IDs from audioLists (use trackId field from mapped items)
         const trackIds = audioLists.map(item => item.trackId).filter(Boolean)
-        const currentIndex = audioLists.findIndex(item => item.trackId === audioInfo?.trackId)
+        let currentIndex = audioLists.findIndex(item => item.trackId === audioInfo?.trackId)
+
+        // If current track was removed (findIndex returns -1), keep same index position
+        // Next track shifts into current position naturally
+        if (currentIndex === -1 && roomState.currentIndex !== undefined) {
+          currentIndex = Math.min(roomState.currentIndex, audioLists.length - 1)
+        } else if (currentIndex === -1) {
+          currentIndex = 0 // Fallback if no room state
+        }
+
+        // Include current playback state to preserve position
+        const playbackState = audioInstance ? {
+          currentTrackId: audioInfo?.trackId || trackIds[currentIndex],
+          currentPosition: Math.floor((audioInstance.currentTime || 0) * 1000),
+          isPlaying: !audioInstance.paused
+        } : null
 
         console.log('[Player] Broadcasting queue change:', {
           trackIds,
-          currentIndex: Math.max(0, currentIndex),
+          currentIndex,
+          playbackState,
           audioLists: audioLists.map(i => ({ trackId: i.trackId, name: i.name }))
         })
 
-        roomSync.handleQueueChange(trackIds, Math.max(0, currentIndex))
+        roomSync.handleQueueChange(trackIds, currentIndex, playbackState)
       }
     },
-    [dispatch, roomState.isInRoom, roomState.canControl, roomSync, notify],
+    [dispatch, roomState.isInRoom, roomState.canControl, roomState.currentIndex, roomSync, notify, audioInstance],
   )
 
   const nextSong = useCallback(() => {
@@ -239,6 +275,28 @@ const Player = () => {
         context.resume()
       }
 
+      // If in room without control permission, sync to server position when unpausing
+      if (roomState.isInRoom && !roomState.canControl && audioInstance && !isCurrentlyPlayingRef.current) {
+        let serverPosition = roomState.currentPosition / 1000 // Convert from ms to seconds
+
+        // Calculate expected position if host is playing (account for time drift)
+        if (roomState.isPlaying && roomState.lastUpdateTimestamp) {
+          const timeSinceUpdate = (Date.now() - roomState.lastUpdateTimestamp) / 1000
+          serverPosition += timeSinceUpdate
+          console.log('[Player] Calculated expected position with drift:', serverPosition, '(+', timeSinceUpdate.toFixed(2), 's)')
+        }
+
+        const currentPosition = info.currentTime || 0
+        const positionDiff = Math.abs(serverPosition - currentPosition)
+
+        // If more than 1 second difference, sync to server position
+        if (positionDiff > 1) {
+          console.log('[Player] Syncing to expected server position on unpause:', serverPosition, 'current:', currentPosition)
+          notify('room.sync.position', { type: 'info' })
+          audioInstance.currentTime = serverPosition
+        }
+      }
+
       dispatch(currentPlaying(info))
       if (startTime === null) {
         setStartTime(Date.now())
@@ -273,8 +331,24 @@ const Player = () => {
       // Broadcast play event (will be deduplicated if it matches recently applied remote state)
       roomSync.handlePlay(info)
     },
-    [context, dispatch, showNotifications, startTime, roomSync],
+    [context, dispatch, showNotifications, startTime, roomSync, roomState.isInRoom, roomState.canControl, roomState.currentPosition, audioInstance, isCurrentlyPlayingRef],
   )
+
+  const onBeforeAudioPlay = useCallback((audioLists, audioInfo) => {
+    // Block track changes in room without control permission
+    if (roomState.isInRoom && !roomState.canControl) {
+      // Check if this is a user-initiated track change (different from current track)
+      const currentTrackId = playerState.current?.trackId
+      const newTrackId = audioInfo?.trackId
+
+      if (currentTrackId && newTrackId && currentTrackId !== newTrackId) {
+        console.log('[Player] Track change blocked - no control permission')
+        notify('room.errors.noPermission', { type: 'warning' })
+        return false // Prevent track change
+      }
+    }
+    return true // Allow track change
+  }, [roomState.isInRoom, roomState.canControl, playerState.current, notify])
 
   const onAudioPlayTrackChange = useCallback(() => {
     if (scrobbled) {
@@ -434,6 +508,25 @@ const Player = () => {
 
       const trackId = playerState.current?.trackId
       if (trackId && roomState.isInRoom) {
+        // Block seeking if user doesn't have control permission
+        if (!roomState.canControl) {
+          // Prevent infinite loop: if we're already blocking a seek, don't trigger another
+          if (blockingSeekRef.current) {
+            blockingSeekRef.current = false
+            return
+          }
+
+          console.log('[Player] Seek blocked - no control permission, reverting to server position')
+          blockingSeekRef.current = true
+
+          // Revert to server position
+          const serverPosition = roomState.currentPosition / 1000
+          if (Math.abs(currentTime - serverPosition) > 0.1) {
+            audioInstance.currentTime = serverPosition
+          }
+          return
+        }
+
         // If seeking while paused, expect library to auto-play and reverse it
         if (wasPaused) {
           console.log('[Player] User seeked while paused, expecting auto-play (will reverse)')
@@ -451,7 +544,7 @@ const Player = () => {
 
     audioInstance.addEventListener('seeked', handleSeeked)
     return () => audioInstance.removeEventListener('seeked', handleSeeked)
-  }, [audioInstance, playerState.current, isCurrentlyPlaying, roomState.isInRoom, roomSync])
+  }, [audioInstance, playerState.current, isCurrentlyPlaying, roomState.isInRoom, roomState.canControl, roomState.currentPosition, roomSync])
   const prevRoomStateRef = useRef({
     isPlaying: false,
     currentPosition: 0,
@@ -530,11 +623,9 @@ const Player = () => {
     prevIsInRoomRef.current = true
 
     if (!roomState.sharedQueue || roomState.sharedQueue.length === 0) {
-      // If room has empty queue and we just joined, clear player queue
-      if (justJoinedRoom) {
-        console.log('[Player] Joined room with empty queue, clearing player queue')
-        dispatch(clearQueue())
-      }
+      // If room has empty queue, clear player queue (always, not just when joining)
+      console.log('[Player] Room queue is empty, clearing player queue')
+      dispatch(clearQueue())
       return
     }
 
@@ -563,9 +654,17 @@ const Player = () => {
       const tracks = responses.filter(r => r !== null).map(r => r.data)
       console.log('[Player] Fetched room queue tracks:', tracks)
 
-      // Sync queue to player (replace entire queue)
-      if (tracks.length > 0) {
-        dispatch(syncQueue({ trackId: tracks[roomState.currentIndex]?.id }, tracks))
+      // Map tracks to audio player format
+      const audioLists = tracks.map(track => mapToAudioLists(track))
+      console.log('[Player] Mapped to audioLists:', audioLists)
+
+      // Sync queue to player with clear flag to force complete replacement
+      if (audioLists.length > 0) {
+        const currentTrack = audioLists[roomState.currentIndex]
+        dispatch(syncQueue({ trackId: currentTrack?.trackId }, audioLists, true))
+      } else {
+        // Empty queue - clear player queue
+        dispatch(clearQueue())
       }
     })
   }, [roomState.isInRoom, roomState.sharedQueue, roomState.currentIndex, dataProvider, dispatch])
@@ -578,6 +677,7 @@ const Player = () => {
         onAudioListsChange={onAudioListsChange}
         onAudioVolumeChange={onAudioVolumeChange}
         onAudioProgress={onAudioProgress}
+        onBeforeAudioPlay={onBeforeAudioPlay}
         onAudioPlay={onAudioPlay}
         onAudioPlayTrackChange={onAudioPlayTrackChange}
         onAudioPause={onAudioPause}

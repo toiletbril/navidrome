@@ -18,7 +18,7 @@ import { makeStyles } from '@material-ui/core/styles'
 import { Refresh, Lock, People as PeopleIcon } from '@material-ui/icons'
 import { roomService } from './roomService'
 import { useDispatch } from 'react-redux'
-import { updateRoomState } from '../actions'
+import { updateRoom } from '../actions'
 
 const useStyles = makeStyles((theme) => ({
   title: {
@@ -82,7 +82,7 @@ export const RoomList = ({ open, onClose, embedded = false }) => {
       console.log('[RoomList] Joined room:', roomData)
 
       // Update Redux state with room data
-      dispatch(updateRoomState(roomData))
+      dispatch(updateRoom(roomData))
 
       onClose()
     } catch (err) {

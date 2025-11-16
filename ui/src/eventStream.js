@@ -24,13 +24,9 @@ const setupHandlers = (stream, dispatchFn) => {
     stream.addEventListener('nowPlayingCount', eventHandler(dispatchFn))
   }
   stream.addEventListener('keepAlive', eventHandler(dispatchFn))
-  // Room events
-  stream.addEventListener('roomStateChange', eventHandler(dispatchFn))
-  stream.addEventListener('roomQueueChanged', eventHandler(dispatchFn))
-  stream.addEventListener('roomHostControlChanged', eventHandler(dispatchFn))
+  // Room events - unified event for all room state updates
+  stream.addEventListener('roomUpdate', eventHandler(dispatchFn))
   stream.addEventListener('roomParticipantKicked', eventHandler(dispatchFn))
-  stream.addEventListener('roomUserJoined', eventHandler(dispatchFn))
-  stream.addEventListener('roomUserLeft', eventHandler(dispatchFn))
   stream.onerror = (e) => {
     // eslint-disable-next-line no-console
     console.log('EventStream error', e)
@@ -92,13 +88,9 @@ const startEventStreamLegacy = async (dispatchFn) => {
         newStream.addEventListener('nowPlayingCount', eventHandler(dispatchFn))
       }
       newStream.addEventListener('keepAlive', eventHandler(dispatchFn))
-      // Room events
-      newStream.addEventListener('roomStateChange', eventHandler(dispatchFn))
-      newStream.addEventListener('roomQueueChanged', eventHandler(dispatchFn))
-      newStream.addEventListener('roomHostControlChanged', eventHandler(dispatchFn))
+      // Room events - unified event for all room state updates
+      newStream.addEventListener('roomUpdate', eventHandler(dispatchFn))
       newStream.addEventListener('roomParticipantKicked', eventHandler(dispatchFn))
-      newStream.addEventListener('roomUserJoined', eventHandler(dispatchFn))
-      newStream.addEventListener('roomUserLeft', eventHandler(dispatchFn))
       newStream.onerror = (e) => {
         // eslint-disable-next-line no-console
         console.log('EventStream error', e)

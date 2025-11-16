@@ -70,10 +70,18 @@ export const roomService = {
     return response.json
   },
 
-  create: async (name) => {
+  create: async (name, initialState) => {
+    const payload = { name }
+    if (initialState) {
+      payload.queueItems = initialState.queueItems
+      payload.currentIndex = initialState.currentIndex
+      payload.currentTrackId = initialState.currentTrackId
+      payload.currentPosition = initialState.currentPosition
+      payload.isPlaying = initialState.isPlaying
+    }
     const response = await httpClient(`${REST_URL}/room`, {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload),
     })
     return response.json
   },
@@ -114,10 +122,16 @@ export const roomService = {
     return response.json
   },
 
-  updateQueue: async (queueItems, currentIndex) => {
+  updateQueue: async (queueItems, currentIndex, playbackState) => {
+    const payload = { queueItems, currentIndex }
+    if (playbackState) {
+      payload.currentTrackId = playbackState.currentTrackId
+      payload.currentPosition = playbackState.currentPosition
+      payload.isPlaying = playbackState.isPlaying
+    }
     await httpClient(`${REST_URL}/room/queue`, {
       method: 'POST',
-      body: JSON.stringify({ queueItems, currentIndex }),
+      body: JSON.stringify(payload),
     })
   },
 

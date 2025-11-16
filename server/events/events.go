@@ -80,42 +80,31 @@ type NowPlayingCount struct {
 	Count int `json:"count"`
 }
 
-type RoomStateChange struct {
+// RoomUpdate contains the complete room state including participants
+// This replaces the fragmented RoomStateChange, RoomQueueChanged, RoomHostControlChanged events
+// to eliminate state synchronization issues and simplify frontend state management
+type RoomUpdate struct {
 	baseEvent
 	RoomID          string `json:"roomId"`
+	RoomName        string `json:"roomName"`
+	HostUserID      string `json:"hostUserId"`
+	HostControlOnly bool   `json:"hostControlOnly"`
+	QueueItems      []string `json:"queueItems"`
+	CurrentIndex    int    `json:"currentIndex"`
 	CurrentTrackID  string `json:"currentTrackId,omitempty"`
 	CurrentPosition int64  `json:"currentPosition"`
 	IsPlaying       bool   `json:"isPlaying"`
-	UserID          string `json:"userId"` // ID of user who triggered this state change
+	Participants    []RoomParticipant `json:"participants"`
+	UserID          string `json:"userId,omitempty"` // Originating user ID for client-side deduplication
 }
 
-type RoomUserJoined struct {
-	baseEvent
-	RoomID   string `json:"roomId"`
+type RoomParticipant struct {
 	UserID   string `json:"userId"`
 	UserName string `json:"userName"`
+	RoomID   string `json:"roomId"`
 }
 
-type RoomUserLeft struct {
-	baseEvent
-	RoomID string `json:"roomId"`
-	UserID string `json:"userId"`
-}
-
-type RoomQueueChanged struct {
-	baseEvent
-	RoomID       string   `json:"roomId"`
-	QueueItems   []string `json:"queueItems"`
-	CurrentIndex int      `json:"currentIndex"`
-	UserID       string   `json:"userId"` // ID of user who triggered this queue change
-}
-
-type RoomHostControlChanged struct {
-	baseEvent
-	RoomID          string `json:"roomId"`
-	HostControlOnly bool   `json:"hostControlOnly"`
-}
-
+// RoomParticipantKicked is kept separate since kicked users need immediate notification before they can receive room updates
 type RoomParticipantKicked struct {
 	baseEvent
 	RoomID       string `json:"roomId"`
