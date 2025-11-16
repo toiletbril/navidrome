@@ -626,5 +626,40 @@
       "vol_down": "Volume Down",
       "toggle_love": "Add this track to favourites"
     }
+  },
+  "room": {
+    "dialog": {
+      "title": "Syncplay Room",
+      "createTab": "Create Room",
+      "joinTab": "Join Room",
+      "createDescription": "Create a new room and invite others to listen together",
+      "joinDescription": "Enter a room ID to join an existing room",
+      "roomName": "Room Name",
+      "roomId": "Room ID",
+      "create": "Create",
+      "join": "Join"
+    },
+    "controls": {
+      "tooltip": "Room Controls",
+      "inRoom": "In Room",
+      "roomDetails": "Room Details",
+      "host": "HOST",
+      "roomId": "Room ID",
+      "participants": "Participants",
+      "noParticipants": "No other participants yet",
+      "leave": "Leave Room"
+    },
+    "created": "Room created successfully",
+    "joined": "Joined room successfully",
+    "left": "Left room",
+    "idCopied": "Room ID copied to clipboard",
+    "errors": {
+      "nameRequired": "Room name is required",
+      "idRequired": "Room ID is required",
+      "createFailed": "Failed to create room",
+      "joinFailed": "Failed to join room",
+      "leaveFailed": "Failed to leave room",
+      "copyFailed": "Failed to copy room ID"
+    }
   }
 }

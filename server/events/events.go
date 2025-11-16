@@ -12,10 +12,22 @@ import (
 type eventCtxKey string
 
 const broadcastToAllKey eventCtxKey = "broadcastToAll"
+const excludeUserIDKey eventCtxKey = "excludeUserID"
+const roomParticipantsKey eventCtxKey = "roomParticipants"
 
 // broadcastToAll is a context key that can be used to broadcast an event to all clients
 func broadcastToAll(ctx context.Context) context.Context {
 	return context.WithValue(ctx, broadcastToAllKey, true)
+}
+
+// WithExcludeUserID adds a userID to exclude from the broadcast (prevents echo to originator)
+func WithExcludeUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, excludeUserIDKey, userID)
+}
+
+// WithRoomParticipants adds list of participant userIDs to filter recipients (only send to these users)
+func WithRoomParticipants(ctx context.Context, participantIDs []string) context.Context {
+	return context.WithValue(ctx, roomParticipantsKey, participantIDs)
 }
 
 type Event interface {
@@ -66,6 +78,48 @@ type RefreshResource struct {
 type NowPlayingCount struct {
 	baseEvent
 	Count int `json:"count"`
+}
+
+type RoomStateChange struct {
+	baseEvent
+	RoomID          string `json:"roomId"`
+	CurrentTrackID  string `json:"currentTrackId,omitempty"`
+	CurrentPosition int64  `json:"currentPosition"`
+	IsPlaying       bool   `json:"isPlaying"`
+	UserID          string `json:"userId"` // ID of user who triggered this state change
+}
+
+type RoomUserJoined struct {
+	baseEvent
+	RoomID   string `json:"roomId"`
+	UserID   string `json:"userId"`
+	UserName string `json:"userName"`
+}
+
+type RoomUserLeft struct {
+	baseEvent
+	RoomID string `json:"roomId"`
+	UserID string `json:"userId"`
+}
+
+type RoomQueueChanged struct {
+	baseEvent
+	RoomID       string   `json:"roomId"`
+	QueueItems   []string `json:"queueItems"`
+	CurrentIndex int      `json:"currentIndex"`
+	UserID       string   `json:"userId"` // ID of user who triggered this queue change
+}
+
+type RoomHostControlChanged struct {
+	baseEvent
+	RoomID          string `json:"roomId"`
+	HostControlOnly bool   `json:"hostControlOnly"`
+}
+
+type RoomParticipantKicked struct {
+	baseEvent
+	RoomID       string `json:"roomId"`
+	KickedUserID string `json:"kickedUserId"`
 }
 
 func (rr *RefreshResource) With(resource string, ids ...string) *RefreshResource {

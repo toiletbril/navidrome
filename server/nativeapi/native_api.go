@@ -18,6 +18,7 @@ import (
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server"
+	"github.com/navidrome/navidrome/server/events"
 )
 
 type Router struct {
@@ -27,10 +28,17 @@ type Router struct {
 	playlists core.Playlists
 	insights  metrics.Insights
 	libs      core.Library
+	broker    events.Broker
 }
 
-func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights, libraryService core.Library) *Router {
-	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights, libs: libraryService}
+func New(ds model.DataStore, share core.Share, playlists core.Playlists, insights metrics.Insights, libraryService core.Library, broker events.Broker) *Router {
+	r := &Router{ds: ds, share: share, playlists: playlists, insights: insights, libs: libraryService, broker: broker}
+
+	// Register cleanup handler for SSE disconnections
+	broker.RegisterCleanupHandler(func(ctx context.Context, username string) {
+		cleanupDisconnectedUser(ctx, ds, broker, username)
+	})
+
 	r.Handler = r.routes()
 	return r
 }
@@ -63,6 +71,7 @@ func (n *Router) routes() http.Handler {
 		n.addPlaylistTrackRoute(r)
 		n.addSongPlaylistsRoute(r)
 		n.addQueueRoute(r)
+		n.addRoomRoute(r)
 		n.addMissingFilesRoute(r)
 		n.addKeepAliveRoute(r)
 		n.addInsightsRoute(r)
@@ -166,6 +175,22 @@ func (n *Router) addQueueRoute(r chi.Router) {
 		r.Post("/", saveQueue(n.ds))
 		r.Put("/", updateQueue(n.ds))
 		r.Delete("/", clearQueue(n.ds))
+	})
+}
+
+func (n *Router) addRoomRoute(r chi.Router) {
+	r.Get("/rooms", listRooms(n.ds))
+	r.Route("/room", func(r chi.Router) {
+		r.Post("/", createRoom(n.ds, n.broker))
+		r.Get("/", getRoom(n.ds))
+		r.Post("/join", joinRoom(n.ds, n.broker))
+		r.Delete("/leave", leaveRoom(n.ds, n.broker))
+		r.Post("/state", updateRoomState(n.ds, n.broker))
+		r.Put("/settings", updateSettings(n.ds, n.broker))
+		r.Post("/queue", updateRoomQueue(n.ds, n.broker))
+		r.Put("/queue/add", addToRoomQueue(n.ds, n.broker))
+		r.Delete("/queue/remove", removeFromRoomQueue(n.ds, n.broker))
+		r.Delete("/participant", kickParticipant(n.ds, n.broker))
 	})
 }
 

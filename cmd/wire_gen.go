@@ -72,7 +72,7 @@ func CreateNativeAPIRouter(ctx context.Context) *nativeapi.Router {
 	scannerScanner := scanner.New(ctx, dataStore, cacheWarmer, broker, playlists, metricsMetrics)
 	watcher := scanner.GetWatcher(dataStore, scannerScanner)
 	library := core.NewLibrary(dataStore, scannerScanner, watcher, broker)
-	router := nativeapi.New(dataStore, share, playlists, insights, library)
+	router := nativeapi.New(dataStore, share, playlists, insights, library, broker)
 	return router
 }
 

@@ -136,7 +136,8 @@ docker-build: ##@Cross_Compilation Cross-compile for any supported platform (che
 		--build-arg GIT_TAG=${GIT_TAG} \
 		--build-arg GIT_SHA=${GIT_SHA} \
 		--build-arg CROSS_TAGLIB_VERSION=${CROSS_TAGLIB_VERSION} \
-		--output "./binaries" --target binary .
+		--output "./binaries" --target binary . \
+		--load
 .PHONY: docker-build
 
 docker-image: ##@Cross_Compilation Build Docker image, tagged as `deluan/navidrome:develop`, override with DOCKER_TAG var. Use IMAGE_PLATFORMS to specify target platforms
@@ -148,7 +149,8 @@ docker-image: ##@Cross_Compilation Build Docker image, tagged as `deluan/navidro
 		--build-arg GIT_TAG=${GIT_TAG} \
 		--build-arg GIT_SHA=${GIT_SHA} \
 		--build-arg CROSS_TAGLIB_VERSION=${CROSS_TAGLIB_VERSION} \
-		--tag $(DOCKER_TAG) .
+		--tag $(DOCKER_TAG) . \
+		--load
 .PHONY: docker-image
 
 docker-msi: ##@Cross_Compilation Build MSI installer for Windows

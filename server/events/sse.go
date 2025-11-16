@@ -20,6 +20,7 @@ type Broker interface {
 	http.Handler
 	SendMessage(ctx context.Context, event Event)
 	SendBroadcastMessage(ctx context.Context, event Event)
+	RegisterCleanupHandler(handler func(ctx context.Context, username string))
 }
 
 const (
@@ -40,6 +41,7 @@ type (
 	client      struct {
 		id             string
 		address        string
+		userID         string
 		username       string
 		userAgent      string
 		clientUniqueId string
@@ -61,6 +63,9 @@ type broker struct {
 
 	// Closed client connections
 	unsubscribing clientsChan
+
+	// Cleanup handler called when client disconnects
+	cleanupHandler func(ctx context.Context, username string)
 }
 
 func GetBroker() Broker {
@@ -87,6 +92,10 @@ func (b *broker) SendMessage(ctx context.Context, evt Event) {
 	msg := b.prepareMessage(ctx, evt)
 	log.Trace("Broker received new event", "type", msg.event, "data", msg.data)
 	b.publish <- msg
+}
+
+func (b *broker) RegisterCleanupHandler(handler func(ctx context.Context, username string)) {
+	b.cleanupHandler = handler
 }
 
 func (b *broker) prepareMessage(ctx context.Context, event Event) message {
@@ -170,6 +179,7 @@ func (b *broker) subscribe(r *http.Request) client {
 	clientUniqueId, _ := request.ClientUniqueIdFrom(ctx)
 	c := client{
 		id:             id.NewRandom(),
+		userID:         user.ID,
 		username:       user.UserName,
 		address:        r.RemoteAddr,
 		userAgent:      r.UserAgent(),
@@ -193,6 +203,24 @@ func (b *broker) unsubscribe(c client) {
 }
 
 func (b *broker) shouldSend(msg message, c client) bool {
+	// Check if this user should be excluded from the broadcast
+	if excludeUserID, ok := msg.senderCtx.Value(excludeUserIDKey).(string); ok && excludeUserID != "" {
+		if c.userID == excludeUserID {
+			return false // Skip sending to excluded user
+		}
+	}
+
+	// Check if message is restricted to room participants
+	if participantIDs, ok := msg.senderCtx.Value(roomParticipantsKey).([]string); ok && participantIDs != nil {
+		// Only send if client's userID is in the participants list
+		for _, pid := range participantIDs {
+			if c.userID == pid {
+				return true
+			}
+		}
+		return false // Client not in room, don't send
+	}
+
 	if broadcastToAll, ok := msg.senderCtx.Value(broadcastToAllKey).(bool); ok && broadcastToAll {
 		return true
 	}
@@ -240,6 +268,11 @@ func (b *broker) listen() {
 			close(c.msgC)
 			delete(clients, c)
 			log.Debug("Removed client from EventStream broker", "numActiveClients", len(clients), "client", c.String())
+
+			// Call cleanup handler if registered
+			if b.cleanupHandler != nil {
+				go b.cleanupHandler(context.Background(), c.username)
+			}
 
 		case msg := <-b.publish:
 			msg.id = getNextEventId()
@@ -289,3 +322,5 @@ type noopBroker struct {
 func (b noopBroker) SendBroadcastMessage(context.Context, Event) {}
 
 func (noopBroker) SendMessage(context.Context, Event) {}
+
+func (noopBroker) RegisterCleanupHandler(func(context.Context, string)) {}

@@ -1,4 +1,4 @@
-import React, { createElement, forwardRef, Fragment } from 'react'
+import React, { createElement, forwardRef, Fragment, useState } from 'react'
 import {
   AppBar as RAAppBar,
   MenuItemLink,
@@ -8,14 +8,16 @@ import {
 } from 'react-admin'
 import { MdInfo, MdPerson, MdSupervisorAccount } from 'react-icons/md'
 import { useSelector } from 'react-redux'
-import { makeStyles, MenuItem, ListItemIcon, Divider } from '@material-ui/core'
+import { makeStyles, MenuItem, ListItemIcon, Divider, IconButton, Tooltip } from '@material-ui/core'
 import ViewListIcon from '@material-ui/icons/ViewList'
+import { People as PeopleIcon } from '@material-ui/icons'
 import { Dialogs } from '../dialogs/Dialogs'
 import { AboutDialog } from '../dialogs'
 import PersonalMenu from './PersonalMenu'
 import ActivityPanel from './ActivityPanel'
 import NowPlayingPanel from './NowPlayingPanel'
 import UserMenu from './UserMenu'
+import { RoomDialog, RoomControls } from '../room'
 import config from '../config'
 
 const useStyles = makeStyles(
@@ -27,6 +29,9 @@ const useStyles = makeStyles(
       color: theme.palette.text.primary,
     },
     icon: { minWidth: theme.spacing(5) },
+    roomButton: {
+      marginRight: theme.spacing(1),
+    },
   }),
   {
     name: 'NDAppBar',
@@ -66,6 +71,40 @@ const settingsResources = (resource) =>
   resource.hasList &&
   resource.options &&
   resource.options.subMenu === 'settings'
+
+const RoomButton = () => {
+  const translate = useTranslate()
+  const roomState = useSelector((state) => state.room)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const classes = useStyles()
+
+  const handleOpen = () => {
+    setDialogOpen(true)
+  }
+
+  const handleClose = () => {
+    setDialogOpen(false)
+  }
+
+  return (
+    <div className={classes.roomButton}>
+      {roomState.isInRoom ? (
+        <RoomControls />
+      ) : (
+        <Tooltip title={translate('room.button.tooltip', { _: 'Syncplay Room' })}>
+          <IconButton
+            color="inherit"
+            onClick={handleOpen}
+            size="small"
+          >
+            <PeopleIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      <RoomDialog open={dialogOpen} onClose={handleClose} />
+    </div>
+  )
+}
 
 const CustomUserMenu = ({ onClick, ...rest }) => {
   const translate = useTranslate()
@@ -124,6 +163,7 @@ const CustomUserMenu = ({ onClick, ...rest }) => {
         permissions === 'admin' &&
         config.enableNowPlaying && <NowPlayingPanel />}
       {config.devActivityPanel && permissions === 'admin' && <ActivityPanel />}
+      <RoomButton />
       <UserMenu {...rest}>
         <PersonalMenu sidebarIsOpen={true} onClick={onClick} />
         <Divider />

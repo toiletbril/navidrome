@@ -1,14 +1,16 @@
 import React, { useCallback } from 'react'
-import { useDispatch } from 'react-redux'
+import { useDispatch, useSelector } from 'react-redux'
 import { useGetOne } from 'react-admin'
 import { GlobalHotKeys } from 'react-hotkeys'
 import IconButton from '@material-ui/core/IconButton'
-import { useMediaQuery } from '@material-ui/core'
+import { useMediaQuery, Tooltip } from '@material-ui/core'
 import { RiSaveLine } from 'react-icons/ri'
+import { MdSync } from 'react-icons/md'
 import { LoveButton, useToggleLove } from '../common'
 import { openSaveQueueDialog } from '../actions'
 import { keyMap } from '../hotkeys'
 import { makeStyles } from '@material-ui/core/styles'
+import { roomService } from '../room/roomService'
 
 const useStyles = makeStyles((theme) => ({
   toolbar: {
@@ -55,12 +57,13 @@ const useStyles = makeStyles((theme) => ({
   },
 }))
 
-const PlayerToolbar = ({ id, isRadio }) => {
+const PlayerToolbar = ({ id, isRadio, audioInstance }) => {
   const dispatch = useDispatch()
   const { data, loading } = useGetOne('song', id, { enabled: !!id && !isRadio })
   const [toggleLove, toggling] = useToggleLove('song', data)
   const isDesktop = useMediaQuery('(min-width:810px)')
   const classes = useStyles()
+  const roomState = useSelector((state) => state.room)
 
   const handlers = {
     TOGGLE_LOVE: useCallback(() => toggleLove(), [toggleLove]),
@@ -72,6 +75,28 @@ const PlayerToolbar = ({ id, isRadio }) => {
       e.stopPropagation()
     },
     [dispatch],
+  )
+
+  const handleSyncRoom = useCallback(
+    async (e) => {
+      e.stopPropagation()
+      if (!audioInstance || !id || isRadio || !roomState.isInRoom) {
+        return
+      }
+
+      try {
+        const state = {
+          isPlaying: !audioInstance.paused,
+          currentPosition: Math.floor(audioInstance.currentTime * 1000),
+          currentTrackId: id,
+        }
+        console.log('[PlayerToolbar] Manual sync triggered:', state)
+        await roomService.updateState(state)
+      } catch (error) {
+        console.error('[PlayerToolbar] Failed to sync room:', error)
+      }
+    },
+    [audioInstance, id, isRadio, roomState.isInRoom],
   )
 
   const buttonClass = isDesktop ? classes.button : classes.mobileButton
@@ -99,6 +124,20 @@ const PlayerToolbar = ({ id, isRadio }) => {
     />
   )
 
+  const syncButton = roomState.isInRoom && (
+    <Tooltip title="Sync playback state to room">
+      <IconButton
+        size={isDesktop ? 'small' : undefined}
+        onClick={handleSyncRoom}
+        disabled={isRadio || !audioInstance}
+        data-testid="sync-room-button"
+        className={buttonClass}
+      >
+        <MdSync className={!isDesktop ? classes.mobileIcon : undefined} />
+      </IconButton>
+    </Tooltip>
+  )
+
   return (
     <>
       <GlobalHotKeys keyMap={keyMap} handlers={handlers} allowChanges />
@@ -106,11 +145,13 @@ const PlayerToolbar = ({ id, isRadio }) => {
         <li className={`${listItemClass} item`}>
           {saveQueueButton}
           {loveButton}
+          {syncButton}
         </li>
       ) : (
         <>
           <li className={`${listItemClass} item`}>{saveQueueButton}</li>
           <li className={`${listItemClass} item`}>{loveButton}</li>
+          {syncButton && <li className={`${listItemClass} item`}>{syncButton}</li>}
         </>
       )}
     </>

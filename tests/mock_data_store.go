@@ -221,6 +221,13 @@ func (db *MockDataStore) Radio(ctx context.Context) model.RadioRepository {
 	return db.MockedRadio
 }
 
+func (db *MockDataStore) Room(ctx context.Context) model.RoomRepository {
+	if db.RealDS != nil {
+		return db.RealDS.Room(ctx)
+	}
+	return struct{ model.RoomRepository }{}
+}
+
 func (db *MockDataStore) WithTx(block func(tx model.DataStore) error, label ...string) error {
 	return block(db)
 }

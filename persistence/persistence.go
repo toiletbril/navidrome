@@ -89,6 +89,10 @@ func (s *SQLStore) ScrobbleBuffer(ctx context.Context) model.ScrobbleBufferRepos
 	return NewScrobbleBufferRepository(ctx, s.getDBXBuilder())
 }
 
+func (s *SQLStore) Room(ctx context.Context) model.RoomRepository {
+	return NewRoomRepository()
+}
+
 func (s *SQLStore) Resource(ctx context.Context, m interface{}) model.ResourceRepository {
 	switch m.(type) {
 	case model.User:
